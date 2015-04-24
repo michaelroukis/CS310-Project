@@ -1,9 +1,19 @@
 package edu.duke.raft;
 
+import java.util.Random;
+import java.util.Timer;
+
 public class FollowerMode extends RaftMode {
+	private int timeout;
+	private Timer heartbeatTimer;
+	
   public void go () {
     synchronized (mLock) {
-      int term = 0;
+      int term = mConfig.getCurrentTerm();
+      //Set up timer
+      Random myRandom = new Random();
+      timeout = ELECTION_TIMEOUT_MIN + myRandom.nextInt(ELECTION_TIMEOUT_MAX - ELECTION_TIMEOUT_MIN);
+      heartbeatTimer = scheduleTimer(timeout, 1);
       System.out.println ("S" + 
 			  mID + 
 			  "." + 
@@ -24,8 +34,20 @@ public class FollowerMode extends RaftMode {
 			  int lastLogTerm) {
     synchronized (mLock) {
       int term = mConfig.getCurrentTerm ();
-      int vote = term;
-      return vote;
+      if (candidateTerm < term){
+    	  return term;
+      }
+      else {
+    	  if (true){//TODO: Need to add condition that candidate’s log is at least as up-to-date as receiver’s log
+    		  mConfig.setCurrentTerm(candidateTerm, candidateID);
+    		  if (mConfig.getVotedFor() == candidateID){
+    			  heartbeatTimer.cancel();
+    	          heartbeatTimer = scheduleTimer(timeout, 1);
+    			  return 0;
+    		  }
+    	  }
+    	  return term;
+      }
     }
   }
   
@@ -45,15 +67,23 @@ public class FollowerMode extends RaftMode {
 			    Entry[] entries,
 			    int leaderCommit) {
     synchronized (mLock) {
-      int term = mConfig.getCurrentTerm ();
-      int result = term;
-      return result;
+    	int term = mConfig.getCurrentTerm ();
+        if (leaderTerm < term){
+      	  return term;
+        }
+        else {
+          heartbeatTimer.cancel();
+          heartbeatTimer = scheduleTimer(timeout, 1);
+          //TODO: Do a log check, and if consistent, append, if inconsistent, move back entry index
+      	  return 0;
+        }
     }
   }  
 
   // @param id of the timer that timed out
   public void handleTimeout (int timerID) {
     synchronized (mLock) {
+    	RaftServerImpl.setMode(new CandidateMode());
     }
   }
 }

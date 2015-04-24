@@ -1,9 +1,14 @@
 package edu.duke.raft;
 
+import java.util.Timer;
+
 public class LeaderMode extends RaftMode {
+	private Timer heartbeatTimer;//When timer goes off, must send off heartbeat to other servers
   public void go () {
     synchronized (mLock) {
-      int term = 0;
+      int term = mConfig.getCurrentTerm();
+      //Send out heartbeats to everyone
+      sendHeartbeats();
       System.out.println ("S" + 
 			  mID + 
 			  "." + 
@@ -12,6 +17,7 @@ public class LeaderMode extends RaftMode {
     }
   }
 
+  //LOGIC: If candidate's term is greater, vote for it?
   // @param candidate’s term
   // @param candidate requesting vote
   // @param index of candidate’s last log entry
@@ -23,11 +29,24 @@ public class LeaderMode extends RaftMode {
 			  int lastLogIndex,
 			  int lastLogTerm) {
     synchronized (mLock) {
-      int term = mConfig.getCurrentTerm ();
-      int vote = term;
-      return vote;
+    	 int term = mConfig.getCurrentTerm();
+    	 if (candidateTerm <= term){
+        	  return term;
+          }
+      	  if (true){//TODO: Need to add condition that candidate’s log is at least as up-to-date as receiver’s log
+      		  mConfig.setCurrentTerm(candidateTerm, candidateID);
+      		  heartbeatTimer.cancel();
+        	  RaftServerImpl.setMode(new FollowerMode());
+        	  return 0;
+      	  }
+      	  else {
+      		  mConfig.setCurrentTerm(candidateTerm, 0);
+      		  heartbeatTimer.cancel();
+      		  RaftServerImpl.setMode(new FollowerMode());
+      		  return mConfig.getCurrentTerm();
+      	  }
+        }
     }
-  }
   
 
   // @param leader’s term
@@ -45,15 +64,28 @@ public class LeaderMode extends RaftMode {
 			    Entry[] entries,
 			    int leaderCommit) {
     synchronized (mLock) {
-      int term = mConfig.getCurrentTerm ();
-      int result = term;
-      return result;
+    	 int term = mConfig.getCurrentTerm ();
+         if (leaderTerm > term){
+       	  	heartbeatTimer.cancel();
+       	  	mConfig.setCurrentTerm(leaderTerm, 0);
+       	  	RaftServerImpl.setMode(new FollowerMode());
+         }
+         return mConfig.getCurrentTerm();
     }
   }
 
   // @param id of the timer that timed out
   public void handleTimeout (int timerID) {
     synchronized (mLock) {
+    	sendHeartbeats();
     }
+  }
+  
+  //TODO: Check if this is correct implementation of a heartbeat
+  private void sendHeartbeats(){
+	  for (int i = 1; i<= mConfig.getNumServers(); i++){
+    	  remoteAppendEntries(i, mConfig.getCurrentTerm(), mID, 10, 10, new Entry[0], mCommitIndex);//heartbeat?
+      }
+	  heartbeatTimer = scheduleTimer(HEARTBEAT_INTERVAL, 1);
   }
 }
