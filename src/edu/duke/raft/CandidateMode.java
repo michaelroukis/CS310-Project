@@ -5,33 +5,45 @@ import java.util.Timer;
 
 public class CandidateMode extends RaftMode {
 	private int timeout;
-	private Timer heartbeatTimer; //To check if election has timed out
-	private Timer checkTimer; //To check if it has won/if the servers have responded.
-  public void go () {
-    synchronized (mLock) {
-      //Increment of current term
-      mConfig.setCurrentTerm(mConfig.getCurrentTerm() + 1, mID);
-      int term = mConfig.getCurrentTerm();
-      Random myRandom = new Random();
-      //Set up check timer
-      checkTimer = scheduleTimer(HEARTBEAT_INTERVAL, 2);
-      //Set up election timer
-      timeout = ELECTION_TIMEOUT_MIN + myRandom.nextInt(ELECTION_TIMEOUT_MAX - ELECTION_TIMEOUT_MIN);
-      heartbeatTimer = scheduleTimer(timeout, 1);
-      //Ask for votes from everyone
-      for (int i = 1; i<= mConfig.getNumServers(); i++){
-    	  this.remoteRequestVote(i, term, mID, mLog.getLastIndex(), mLog.getLastTerm());
-      }
-      
-      System.out.println ("S" + 
-			  mID + 
-			  "." + 
-			  term + 
-			  ": switched to candidate mode.");
-    }
-  }
+	private Timer electionTimer; //To check if election has timed out
+	private Timer winCheckTimer; // Check if we won, rather quickly so that we become a Leader in time.
+  
+	public void go () {
 
-  //LOGIC: If term is greater than my term, then convert to a follower. If additionally, the candidate's log is as good as yours, vote for them.
+		synchronized (mLock) {
+
+			//Increment of current term
+			int term = mConfig.getCurrentTerm() + 1;
+			mConfig.setCurrentTerm(term, mID);
+			
+			//Set up election timer
+			Random myRandom = new Random();
+			timeout = ELECTION_TIMEOUT_MIN + myRandom.nextInt(ELECTION_TIMEOUT_MAX - ELECTION_TIMEOUT_MIN);
+			electionTimer = scheduleTimer(timeout, 1);
+			
+			// Set up winCheck timer
+			winCheckTimer = scheduleTimer(1, 2);
+			
+			//Ask for votes from everyone
+			for (int i = 1; i<= mConfig.getNumServers(); i++){
+				
+				// Check for self-voting here, not below
+				if (i != mID) {
+					this.remoteRequestVote(i, term, mID, mLog.getLastIndex(), mLog.getLastTerm());
+				}
+				
+			}
+
+			System.out.println ("S" + 
+					mID + 
+					"." + 
+					term + 
+					": switched to candidate mode.");
+		}
+		
+	}
+
+	// Waiting for heartbeat from Leader in append. Otherwise, deny all votes. We are a candidate!
   // @param candidate’s term
   // @param candidate requesting vote
   // @param index of candidate’s last log entry
@@ -42,34 +54,15 @@ public class CandidateMode extends RaftMode {
 			  int candidateID,
 			  int lastLogIndex,
 			  int lastLogTerm) {
+	  
     synchronized (mLock) {
-    	if (candidateID == mID && candidateTerm == mConfig.getCurrentTerm()){
-    		return 0;
-    	}
-    	int term = mConfig.getCurrentTerm ();
-        if (candidateTerm <= term){
-      	  return term;
-        }
-        else {
-      	  if (true){//TODO: Need to add condition that candidate’s log is at least as up-to-date as receiver’s log
-      		  mConfig.setCurrentTerm(candidateTerm, candidateID);
-      		  heartbeatTimer.cancel();
-      		  checkTimer.cancel();
-        	  RaftServerImpl.setMode(new FollowerMode());
-        	  return 0;
-      	  }
-      	  else {
-      		  mConfig.setCurrentTerm(candidateTerm, 0);
-      		  heartbeatTimer.cancel();
-      		  checkTimer.cancel();
-      		  RaftServerImpl.setMode(new FollowerMode());
-      		  return mConfig.getCurrentTerm();
-      	  }
-        }
+    	return mConfig.getCurrentTerm();
     }
+    
   }
   
-//LOGIC: Don't ever append entries, but if the requester's term is bigger than yours, revert to follower mode.
+//LOGIC: A majority leader has been established if leaderTerm >= our term. Submit like the Follower you are.
+  		// If less than, ignore. Always append failure to respond to ensure leader makes sure we append as future Followers.
   // @param leader’s term
   // @param current leader
   // @param index of log entry before entries to append
@@ -85,44 +78,106 @@ public class CandidateMode extends RaftMode {
 			    Entry[] entries,
 			    int leaderCommit) {
     synchronized (mLock) {
+    	
       int term = mConfig.getCurrentTerm ();
-      if (leaderTerm >= term){
-    	  checkTimer.cancel();
-    	  heartbeatTimer.cancel();
-    	  mConfig.setCurrentTerm(leaderTerm, 0);
-    	  RaftServerImpl.setMode(new FollowerMode());
+      
+      if (leaderTerm >= term) {
+    	  
+    	  electionTimer.cancel();
+          
+          mConfig.setCurrentTerm(leaderTerm, 0);
+          RaftServerImpl.setMode(new FollowerMode());
+ 
       }
+
+      // No appending above. Will message with append failure, prompting leader response when we are a Follower.
       return mConfig.getCurrentTerm();
+      
     }
+    
   }
 
   // @param id of the timer that timed out
   public void handleTimeout (int timerID) {
+	  
     synchronized (mLock) {
-    	int[] responses = RaftResponses.getVotes(mConfig.getCurrentTerm());
-    	if (timerID == 2){
-    		for (int i = 0; i < responses.length; i++){
-    			if (responses[i] == -1){
-    				remoteRequestVote(i+1, mConfig.getCurrentTerm(), mID, mLog.getLastIndex(), mLog.getLastTerm());
-    			}
-    		}
+    	
+    	switch (timerID) {
+    	
+    	// Election Timer
+    	case 1: 
+    		becomeCandidate();
+    		break;
+    			
+    	// WinCheck Timer		
+    	case 2: 
+    		checkForWin();
+    		break;
+    			
+    	default: // doesn't happen	
+    			break;
+    	
     	}
-    	int counter = 0;
-    	for (int response : responses){
-    		if (response == 0){
-    			counter ++;
-    		}
-    	}
-    	if (counter >= mConfig.getNumServers()/2){
-    		heartbeatTimer.cancel();
-    		checkTimer.cancel();
-    		RaftServerImpl.setMode(new LeaderMode());
-    	}
-    	else if (timerID == 1){
-    		heartbeatTimer.cancel();
-    		checkTimer.cancel();
-    		RaftServerImpl.setMode(new CandidateMode());
-    	}
+
     }
+    
   }
+  
+  /**
+   * Checks for win from within synchronized block above. Don't call without first surrounding with synchronization.
+   */
+  private void checkForWin() {
+
+	  double majorityCheck = 0.0;
+	  int votesForUs = 0;
+
+	  int[] responses = RaftResponses.getVotes(mConfig.getCurrentTerm());
+
+	  if (responses != null) {
+
+		  for (int i = 1; i < responses.length; i++){
+
+			  if (responses[i] == 0){
+				  votesForUs++;
+			  }
+
+		  }
+
+		  majorityCheck = ((double)votesForUs) / responses.length;
+
+	  }
+
+	  if (majorityCheck > 0.5) {
+		  becomeLeader();
+	  }
+
+  }
+  
+  /**
+   * Private helper for becoming Leader. Only call from inside synchronized as done above.
+   */
+  private void becomeLeader() {
+	  
+	  cancelTimers();
+	  RaftServerImpl.setMode(new LeaderMode());
+	  
+  }
+
+  /**
+   * Private helper for becoming Candidate. Only call from inside synchronized as done above.
+   */
+  private void becomeCandidate() {
+
+	  cancelTimers();
+	  RaftServerImpl.setMode(new CandidateMode());
+
+  }
+  
+  private void cancelTimers() {
+	  
+	  electionTimer.cancel();
+	  winCheckTimer.cancel();
+	  
+  }
+  
 }
