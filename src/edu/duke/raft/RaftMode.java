@@ -1,9 +1,11 @@
 package edu.duke.raft;
 
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.rmi.Naming;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -50,6 +52,28 @@ public abstract class RaftMode {
 				mConfig.getCurrentTerm () + 
 				": Log " + 
 				mLog);
+		
+		// roukis test
+		// http://stackoverflow.com/questions/1823305/rmi-connection-refused-with-localhost
+		boolean noRMI = true;
+		
+		try {
+			System.out.println(LocateRegistry.createRegistry(rmiPort));
+		} catch (RemoteException e) {
+			System.out.println("No reg found.");
+		}
+		
+		if (noRMI) {
+			
+			try {
+				Runtime.getRuntime().exec("rmiregistry "+rmiPort);
+			} catch (IOException e) {
+				System.out.println("error making RMI.");
+			}
+			
+		}
+		
+		
 	} 
 
 	// @param milliseconds for the timer to wait

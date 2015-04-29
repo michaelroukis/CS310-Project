@@ -1,9 +1,11 @@
 package edu.duke.raft;
 
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.rmi.Naming;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
 
 public class StartClient {
   public static void main (String[] args) {
@@ -18,6 +20,27 @@ public class StartClient {
     System.out.println ("Testing S" + id);
     System.out.println ("Contacting server via rmiregistry " + url);
 
+ // roukis test
+ 		// http://stackoverflow.com/questions/1823305/rmi-connection-refused-with-localhost
+ 		boolean noRMI = true;
+ 		
+ 		try {
+ 			System.out.println(LocateRegistry.createRegistry(port));
+ 		} catch (RemoteException e) {
+ 			System.out.println("No reg found.");
+ 		}
+ 		
+ 		if (noRMI) {
+ 			
+ 			try {
+ 				Runtime.getRuntime().exec("rmiregistry "+port);
+ 			} catch (IOException e) {
+ 				System.out.println("error making RMI.");
+ 			}
+ 			
+ 		}
+ 		
+    
     try {
       RaftServer server = (RaftServer) Naming.lookup(url);
       server.requestVote (0, 0, 0, 0);
